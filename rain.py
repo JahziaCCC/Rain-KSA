@@ -6,13 +6,13 @@ from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
-PATTERN = re.compile(
-    r"\d+\.\s*"
-    r"(?P<city>.+?)\s*"
-    r"\((?P<region>.+?)\):\s*"
+LINE_PATTERN = re.compile(
+    r"^\s*\d+\.\s*"
+    r"(?P<city>.*?)\s*"
+    r"\((?P<region>.*?)\)\s*:\s*"
     r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
-    r"\(من الساعة:\s*(?P<start>.+?)\s*إلى الساعة:\s*(?P<end>.+?)\)"
-    r"(?:\s*(?P<status>الهطول مستمر))?"
+    r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)\s*"
+    r"(?P<status>الهطول مستمر)?\s*$"
 )
 
 def fetch_data():
@@ -23,11 +23,16 @@ def fetch_data():
     soup = BeautifulSoup(resp.text, "html.parser")
     text = soup.get_text("\n", strip=True)
 
-    matches = list(PATTERN.finditer(text))
-    print("MATCHES FOUND:", len(matches))
+    lines = text.splitlines()
+    print("LINES FOUND:", len(lines))
 
     data = []
-    for m in matches:
+    for line in lines:
+        line = line.strip()
+        m = LINE_PATTERN.match(line)
+        if not m:
+            continue
+
         item = {
             "city": m.group("city").strip(),
             "region": m.group("region").strip(),
@@ -39,6 +44,9 @@ def fetch_data():
         data.append(item)
 
     print("DATA COUNT:", len(data))
+    if data:
+        print("FIRST ITEM:", data[0])
+
     return data
 
 def analyze(data):
@@ -49,7 +57,6 @@ def analyze(data):
     active = [d for d in data if "مستمر" in d["status"]]
     top5 = sorted(data, key=lambda x: x["amount"], reverse=True)[:5]
 
-    # أول بداية وآخر نهاية كنصوص وقت من الصفحة
     earliest = min(data, key=lambda x: x["start"])
     latest = max(data, key=lambda x: x["end"])
 
@@ -83,17 +90,13 @@ def build_report(result):
     lines.append("🌦️ أعلى 5:")
 
     for i, item in enumerate(result["top5"], 1):
-        lines.append(
-            f"{i}. {item['city']} - {item['region']} - {item['amount']} ملم"
-        )
+        lines.append(f"{i}. {item['city']} - {item['region']} - {item['amount']} ملم")
 
     lines.append("════════════════════")
     lines.append("📍 الهطول المستمر:")
     if result["active"]:
         for item in result["active"][:10]:
-            lines.append(
-                f"• {item['city']} - {item['region']} ({item['amount']} ملم)"
-            )
+            lines.append(f"• {item['city']} - {item['region']} ({item['amount']} ملم)")
     else:
         lines.append("• لا يوجد")
 
