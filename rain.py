@@ -1,139 +1,51 @@
 import os
-import re
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
-LINE_PATTERN = re.compile(
-    r"^\s*\d+\.\s*"
-    r"(?P<city>.*?)\s*"
-    r"\((?P<region>.*?)\)\s*:\s*"
-    r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
-    r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)\s*"
-    r"(?P<status>الهطول مستمر)?\s*$"
-)
-
-def fetch_data():
-    resp = requests.get(URL, timeout=30)
-    print("PAGE STATUS:", resp.status_code)
-    resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    text = soup.get_text("\n", strip=True)
-
-    lines = text.splitlines()
-    print("LINES FOUND:", len(lines))
-
-    data = []
-    for line in lines:
-        line = line.strip()
-        m = LINE_PATTERN.match(line)
-        if not m:
-            continue
-
-        item = {
-            "city": m.group("city").strip(),
-            "region": m.group("region").strip(),
-            "amount": float(m.group("amount")),
-            "start": m.group("start").strip(),
-            "end": m.group("end").strip(),
-            "status": (m.group("status") or "").strip(),
-        }
-        data.append(item)
-
-    print("DATA COUNT:", len(data))
-    if data:
-        print("FIRST ITEM:", data[0])
-
-    return data
-
-def analyze(data):
-    if not data:
-        return None
-
-    top = max(data, key=lambda x: x["amount"])
-    active = [d for d in data if "مستمر" in d["status"]]
-    top5 = sorted(data, key=lambda x: x["amount"], reverse=True)[:5]
-
-    earliest = min(data, key=lambda x: x["start"])
-    latest = max(data, key=lambda x: x["end"])
-
-    return {
-        "count": len(data),
-        "top": top,
-        "active": active,
-        "top5": top5,
-        "earliest": earliest,
-        "latest": latest,
+def fetch_text():
+    headers = {
+        "User-Agent": "Mozilla/5.0"
     }
 
-def build_report(result):
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    r = requests.get(URL, headers=headers, timeout=30)
+    r.raise_for_status()
 
-    lines = []
-    lines.append("🌧️ تقرير الأمطار – السعودية")
-    lines.append(f"🕒 {now}")
-    lines.append("════════════════════")
-    lines.append(f"📊 عدد المواقع: {result['count']}")
-    lines.append(
-        f"🏆 الأعلى: {result['top']['city']} - {result['top']['region']} ({result['top']['amount']} ملم)"
-    )
-    lines.append(
-        f"⏱️ أول بداية: {result['earliest']['city']} ({result['earliest']['start']})"
-    )
-    lines.append(
-        f"🛑 آخر نهاية: {result['latest']['city']} ({result['latest']['end']})"
-    )
-    lines.append("════════════════════")
-    lines.append("🌦️ أعلى 5:")
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    for i, item in enumerate(result["top5"], 1):
-        lines.append(f"{i}. {item['city']} - {item['region']} - {item['amount']} ملم")
+    # خذ النص كامل
+    text = soup.get_text("\n", strip=True)
 
-    lines.append("════════════════════")
-    lines.append("📍 الهطول المستمر:")
-    if result["active"]:
-        for item in result["active"][:10]:
-            lines.append(f"• {item['city']} - {item['region']} ({item['amount']} ملم)")
-    else:
-        lines.append("• لا يوجد")
+    return text
 
-    return "\n".join(lines)
+def clean_report(text):
+    lines = text.splitlines()
+
+    # نفلتر فقط السطور اللي فيها "ملم"
+    rain_lines = [l for l in lines if "ملم" in l]
+
+    if not rain_lines:
+        return "⚠️ لم يتم العثور على بيانات مطر في الصفحة"
+
+    # خذ أول 15 سطر فقط
+    rain_lines = rain_lines[:15]
+
+    msg = "🌧️ تقرير الأمطار – مباشر\n\n"
+
+    for line in rain_lines:
+        msg += f"{line}\n"
+
+    return msg
 
 def send(msg):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-    if not token or not chat_id:
-        raise ValueError("Telegram secrets missing")
-
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=30)
-
-    print("TELEGRAM STATUS:", r.status_code)
-    print("TELEGRAM RESPONSE:", r.text)
-    r.raise_for_status()
+    requests.post(url, data={"chat_id": chat_id, "text": msg})
 
 if __name__ == "__main__":
-    try:
-        data = fetch_data()
-        result = analyze(data)
-
-        if result:
-            report = build_report(result)
-        else:
-            report = "⚠️ Rain-KSA: تم تشغيل النظام لكن لم يتم العثور على بيانات مطر قابلة للقراءة من الصفحة."
-
-        send(report)
-        print("DONE")
-
-    except Exception as e:
-        error_msg = f"❌ Rain-KSA Error:\n{str(e)}"
-        print(error_msg)
-        try:
-            send(error_msg)
-        except Exception as inner:
-            print("FAILED TO SEND ERROR TO TELEGRAM:", str(inner))
-            raise
+    text = fetch_text()
+    report = clean_report(text)
+    send(report)
