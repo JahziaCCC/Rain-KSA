@@ -55,7 +55,7 @@ def clean_report(text):
     msg += f"اليوم: {day_ar}\n"
     msg += f"التاريخ: {date_text}\n"
     msg += f"الوقت: {time_text}\n\n"
-    msg += "أعلى المواقع:\n"
+    msg += "أعلى كميات الهطول المسجلة:\n"
 
     for i, line in enumerate(rain_lines, 1):
         msg += f"{i}. {line}\n"
