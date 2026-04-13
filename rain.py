@@ -6,10 +6,14 @@ from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
-def parse_amount(text):
-    text = text.strip().replace("ملم", "").replace(",", ".")
-    m = re.search(r"(\d+(?:\.\d+)?)", text)
-    return float(m.group(1)) if m else None
+PATTERN = re.compile(
+    r"\d+\.\s*"
+    r"(?P<city>.+?)\s*"
+    r"\((?P<region>.+?)\):\s*"
+    r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
+    r"\(من الساعة:\s*(?P<start>.+?)\s*إلى الساعة:\s*(?P<end>.+?)\)"
+    r"(?:\s*(?P<status>الهطول مستمر))?"
+)
 
 def fetch_data():
     resp = requests.get(URL, timeout=30)
@@ -17,26 +21,22 @@ def fetch_data():
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
-    rows = soup.find_all("tr")
-    print("ROWS FOUND:", len(rows))
+    text = soup.get_text("\n", strip=True)
+
+    matches = list(PATTERN.finditer(text))
+    print("MATCHES FOUND:", len(matches))
 
     data = []
-    for row in rows:
-        cols = [c.get_text(" ", strip=True) for c in row.find_all("td")]
-        if len(cols) < 5:
-            continue
-
-        amount = parse_amount(cols[1])
-        if amount is None:
-            continue
-
-        data.append({
-            "city": cols[0],
-            "amount": amount,
-            "start": cols[2],
-            "end": cols[3],
-            "status": cols[4],
-        })
+    for m in matches:
+        item = {
+            "city": m.group("city").strip(),
+            "region": m.group("region").strip(),
+            "amount": float(m.group("amount")),
+            "start": m.group("start").strip(),
+            "end": m.group("end").strip(),
+            "status": (m.group("status") or "").strip(),
+        }
+        data.append(item)
 
     print("DATA COUNT:", len(data))
     return data
@@ -49,11 +49,17 @@ def analyze(data):
     active = [d for d in data if "مستمر" in d["status"]]
     top5 = sorted(data, key=lambda x: x["amount"], reverse=True)[:5]
 
+    # أول بداية وآخر نهاية كنصوص وقت من الصفحة
+    earliest = min(data, key=lambda x: x["start"])
+    latest = max(data, key=lambda x: x["end"])
+
     return {
         "count": len(data),
         "top": top,
         "active": active,
-        "top5": top5
+        "top5": top5,
+        "earliest": earliest,
+        "latest": latest,
     }
 
 def build_report(result):
@@ -62,20 +68,32 @@ def build_report(result):
     lines = []
     lines.append("🌧️ تقرير الأمطار – السعودية")
     lines.append(f"🕒 {now}")
-    lines.append("")
+    lines.append("════════════════════")
     lines.append(f"📊 عدد المواقع: {result['count']}")
-    lines.append(f"🏆 الأعلى: {result['top']['city']} ({result['top']['amount']} ملم)")
-    lines.append("")
+    lines.append(
+        f"🏆 الأعلى: {result['top']['city']} - {result['top']['region']} ({result['top']['amount']} ملم)"
+    )
+    lines.append(
+        f"⏱️ أول بداية: {result['earliest']['city']} ({result['earliest']['start']})"
+    )
+    lines.append(
+        f"🛑 آخر نهاية: {result['latest']['city']} ({result['latest']['end']})"
+    )
+    lines.append("════════════════════")
     lines.append("🌦️ أعلى 5:")
 
     for i, item in enumerate(result["top5"], 1):
-        lines.append(f"{i}. {item['city']} - {item['amount']} ملم")
+        lines.append(
+            f"{i}. {item['city']} - {item['region']} - {item['amount']} ملم"
+        )
 
-    lines.append("")
+    lines.append("════════════════════")
     lines.append("📍 الهطول المستمر:")
     if result["active"]:
         for item in result["active"][:10]:
-            lines.append(f"• {item['city']} ({item['amount']} ملم)")
+            lines.append(
+                f"• {item['city']} - {item['region']} ({item['amount']} ملم)"
+            )
     else:
         lines.append("• لا يوجد")
 
@@ -85,9 +103,6 @@ def send(msg):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-    print("TOKEN FOUND:", bool(token))
-    print("CHAT ID FOUND:", bool(chat_id))
-
     if not token or not chat_id:
         raise ValueError("Telegram secrets missing")
 
@@ -96,7 +111,6 @@ def send(msg):
 
     print("TELEGRAM STATUS:", r.status_code)
     print("TELEGRAM RESPONSE:", r.text)
-
     r.raise_for_status()
 
 if __name__ == "__main__":
@@ -115,7 +129,6 @@ if __name__ == "__main__":
     except Exception as e:
         error_msg = f"❌ Rain-KSA Error:\n{str(e)}"
         print(error_msg)
-
         try:
             send(error_msg)
         except Exception as inner:
