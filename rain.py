@@ -13,11 +13,16 @@ def parse_amount(text):
 
 def fetch_data():
     resp = requests.get(URL, timeout=30)
+    print("PAGE STATUS:", resp.status_code)
+    resp.raise_for_status()
+
     soup = BeautifulSoup(resp.text, "html.parser")
+    rows = soup.find_all("tr")
+    print("ROWS FOUND:", len(rows))
 
     data = []
-    for row in soup.find_all("tr"):
-        cols = [c.get_text(strip=True) for c in row.find_all("td")]
+    for row in rows:
+        cols = [c.get_text(" ", strip=True) for c in row.find_all("td")]
         if len(cols) < 5:
             continue
 
@@ -33,6 +38,7 @@ def fetch_data():
             "status": cols[4],
         })
 
+    print("DATA COUNT:", len(data))
     return data
 
 def analyze(data):
@@ -41,7 +47,6 @@ def analyze(data):
 
     top = max(data, key=lambda x: x["amount"])
     active = [d for d in data if "مستمر" in d["status"]]
-
     top5 = sorted(data, key=lambda x: x["amount"], reverse=True)[:5]
 
     return {
@@ -51,42 +56,68 @@ def analyze(data):
         "top5": top5
     }
 
-def build_report(r):
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+def build_report(result):
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    msg = f"""🌧️ تقرير الأمطار – السعودية
-🕒 {now}
+    lines = []
+    lines.append("🌧️ تقرير الأمطار – السعودية")
+    lines.append(f"🕒 {now}")
+    lines.append("")
+    lines.append(f"📊 عدد المواقع: {result['count']}")
+    lines.append(f"🏆 الأعلى: {result['top']['city']} ({result['top']['amount']} ملم)")
+    lines.append("")
+    lines.append("🌦️ أعلى 5:")
 
-📊 عدد المدن: {r['count']}
-🏆 الأعلى: {r['top']['city']} ({r['top']['amount']} ملم)
+    for i, item in enumerate(result["top5"], 1):
+        lines.append(f"{i}. {item['city']} - {item['amount']} ملم")
 
-🌦️ أعلى 5:
-"""
-
-    for i, t in enumerate(r["top5"], 1):
-        msg += f"{i}. {t['city']} - {t['amount']} ملم\n"
-
-    msg += "\n📍 الهطول المستمر:\n"
-
-    if r["active"]:
-        for a in r["active"][:10]:
-            msg += f"• {a['city']} ({a['amount']} ملم)\n"
+    lines.append("")
+    lines.append("📍 الهطول المستمر:")
+    if result["active"]:
+        for item in result["active"][:10]:
+            lines.append(f"• {item['city']} ({item['amount']} ملم)")
     else:
-        msg += "• لا يوجد\n"
+        lines.append("• لا يوجد")
 
-    return msg
+    return "\n".join(lines)
 
 def send(msg):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
+    print("TOKEN FOUND:", bool(token))
+    print("CHAT ID FOUND:", bool(chat_id))
+
+    if not token or not chat_id:
+        raise ValueError("Telegram secrets missing")
+
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, data={"chat_id": chat_id, "text": msg})
+    r = requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=30)
+
+    print("TELEGRAM STATUS:", r.status_code)
+    print("TELEGRAM RESPONSE:", r.text)
+
+    r.raise_for_status()
 
 if __name__ == "__main__":
-    data = fetch_data()
-    r = analyze(data)
+    try:
+        data = fetch_data()
+        result = analyze(data)
 
-    if r:
-        report = build_report(r)
+        if result:
+            report = build_report(result)
+        else:
+            report = "⚠️ Rain-KSA: تم تشغيل النظام لكن لم يتم العثور على بيانات مطر قابلة للقراءة من الصفحة."
+
         send(report)
+        print("DONE")
+
+    except Exception as e:
+        error_msg = f"❌ Rain-KSA Error:\n{str(e)}"
+        print(error_msg)
+
+        try:
+            send(error_msg)
+        except Exception as inner:
+            print("FAILED TO SEND ERROR TO TELEGRAM:", str(inner))
+            raise
