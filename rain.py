@@ -43,13 +43,18 @@ def classify_rain(amount):
 def parse_rain_line(line):
     line = line.strip()
 
-    # استخراج الموقع والكمية
-    main_match = re.search(
-        r"^(?P<location>.+?):\s*(?P<amount>\d+(?:\.\d+)?)\s*ملم",
-        line
+    pattern = re.compile(
+        r"^\s*\d+\.\s*"                               # الترقيم 1. 2. 3.
+        r"(?P<location>.+?)\s*:\s*"
+        r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
+        r"\(من الساعة[:：]?\s*(?P<start>.*?)\s*"
+        r"إلى الساعة[:：]?\s*(?P<end>.*?)\)\s*"
+        r"(?P<ongoing>الهطول مستمر)?\s*$"
     )
 
-    if not main_match:
+    match = pattern.match(line)
+
+    if not match:
         return {
             "location": line,
             "amount": None,
@@ -58,26 +63,12 @@ def parse_rain_line(line):
             "ongoing": False
         }
 
-    location = main_match.group("location").strip()
-    amount = float(main_match.group("amount"))
-
-    # استخراج وقت البداية والنهاية بالصيغتين المحتملتين
-    time_match = re.search(
-        r"\(من الساعة[:：]?\s*(?P<start>.*?)\s*إلى الساعة[:：]?\s*(?P<end>.*?)\)",
-        line
-    )
-
-    start_time = time_match.group("start").strip() if time_match else None
-    end_time = time_match.group("end").strip() if time_match else None
-
-    ongoing = "الهطول مستمر" in line
-
     return {
-        "location": location,
-        "amount": amount,
-        "start": start_time,
-        "end": end_time,
-        "ongoing": ongoing
+        "location": match.group("location").strip(),
+        "amount": float(match.group("amount")),
+        "start": match.group("start").strip(),
+        "end": match.group("end").strip(),
+        "ongoing": bool(match.group("ongoing"))
     }
 
 def build_report(text):
@@ -112,8 +103,7 @@ def build_report(text):
         msg += "التنبيهات:\n"
         for item in high_rain:
             msg += f"- {item['location']}: {item['amount']} ملم ({classify_rain(item['amount'])})\n"
-            if item["start"] and item["end"]:
-                msg += f"  من الساعة {item['start']} إلى الساعة {item['end']}\n"
+            msg += f"  من الساعة {item['start']} إلى الساعة {item['end']}\n"
             if item["ongoing"]:
                 msg += "  الهطول مازال مستمر\n"
         msg += "\n"
