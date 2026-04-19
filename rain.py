@@ -1,17 +1,10 @@
 import os
 import re
-import json
-import hashlib
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
-STATE_FILE = "last_report_hash.txt"
-
-HIGH_THRESHOLD = 40.0
-MEDIUM_THRESHOLD = 20.0
-
 
 def fetch_text():
     headers = {
@@ -22,9 +15,7 @@ def fetch_text():
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
-    text = soup.get_text("\n", strip=True)
-    return text
-
+    return soup.get_text("\n", strip=True)
 
 def get_day_name_arabic(day_en):
     days = {
@@ -38,69 +29,54 @@ def get_day_name_arabic(day_en):
     }
     return days.get(day_en, day_en)
 
+def classify_rain(amount):
+    if amount is None:
+        return None
+    if amount >= 50:
+        return "غزير جدًا"
+    if amount >= 25:
+        return "غزير"
+    if amount >= 10:
+        return "متوسط"
+    return "خفيف"
 
 def parse_rain_line(line):
-    """
-    مثال متوقع:
-    البير (منطقة الرياض): 51.8 ملم من الساعة 04:30 م إلى الساعة 06:25 م
-    أو:
-    الدرعية (منطقة الرياض): 43.8 ملم من الساعة 03:00 م إلى الساعة 06:25 م الهطول مستمر
-    """
+    line = line.strip()
 
-    pattern = re.compile(
-        r"^(?P<location>.+?)\s*:\s*"
-        r"(?P<amount>\d+(?:\.\d+)?)\s*ملم"
-        r"(?:\s*من الساعة\s*(?P<start>.+?)\s*إلى الساعة\s*(?P<end>.+?))?"
-        r"(?:\s*(?P<ongoing>الهطول مستمر))?$"
-    )
-
-    match = pattern.search(line.strip())
-
-    if not match:
+    location_match = re.search(r"^(.*?):\s*(\d+(?:\.\d+)?)\s*ملم", line)
+    if not location_match:
         return {
-            "raw": line.strip(),
-            "location": line.strip(),
+            "location": line,
             "amount": None,
             "start": None,
             "end": None,
             "ongoing": False
         }
 
-    amount_text = match.group("amount")
-    amount_value = float(amount_text) if amount_text else None
+    location = location_match.group(1).strip()
+    amount = float(location_match.group(2))
+
+    start_match = re.search(r"من الساعة\s*(.*?)\s*إلى الساعة", line)
+    end_match = re.search(r"إلى الساعة\s*(.*?)(?:\s*الهطول مستمر|$)", line)
+    ongoing = "الهطول مستمر" in line
+
+    start_time = start_match.group(1).strip() if start_match else None
+    end_time = end_match.group(1).strip() if end_match else None
 
     return {
-        "raw": line.strip(),
-        "location": match.group("location").strip(),
-        "amount": amount_value,
-        "start": match.group("start").strip() if match.group("start") else None,
-        "end": match.group("end").strip() if match.group("end") else None,
-        "ongoing": True if match.group("ongoing") else False
+        "location": location,
+        "amount": amount,
+        "start": start_time,
+        "end": end_time,
+        "ongoing": ongoing
     }
 
-
-def classify_rain(amount):
-    if amount is None:
-        return None
-    if amount >= HIGH_THRESHOLD:
-        return "عالي"
-    if amount >= MEDIUM_THRESHOLD:
-        return "متوسط"
-    return "خفيف"
-
-
-def extract_rain_lines(text):
-    lines = text.splitlines()
-    rain_lines = [line.strip() for line in lines if "ملم" in line]
-    return rain_lines[:15]
-
-
 def build_report(text):
-    rain_lines = extract_rain_lines(text)
+    lines = text.splitlines()
+    rain_lines = [line.strip() for line in lines if "ملم" in line][:15]
 
     now = datetime.now()
-    day_en = now.strftime("%A")
-    day_ar = get_day_name_arabic(day_en)
+    day_ar = get_day_name_arabic(now.strftime("%A"))
     date_text = now.strftime("%Y-%m-%d")
     time_text = now.strftime("%H:%M")
 
@@ -113,10 +89,9 @@ def build_report(text):
             "لا توجد بيانات حالياً"
         )
 
-    parsed_lines = [parse_rain_line(line) for line in rain_lines]
-
-    high_rain = [item for item in parsed_lines if item["amount"] is not None and item["amount"] >= HIGH_THRESHOLD]
-    ongoing_rain = [item for item in parsed_lines if item["ongoing"]]
+    parsed = [parse_rain_line(line) for line in rain_lines]
+    high_rain = [item for item in parsed if item["amount"] is not None and item["amount"] >= 50]
+    ongoing_rain = [item for item in parsed if item["ongoing"]]
 
     msg = ""
     msg += "تقرير الهاطل المطري - المملكة العربية السعودية\n\n"
@@ -127,18 +102,18 @@ def build_report(text):
     if high_rain:
         msg += "التنبيهات:\n"
         for item in high_rain:
-            msg += f"- {item['location']}: {item['amount']} ملم (هطول عالي)\n"
+            msg += f"- {item['location']}: {item['amount']} ملم ({classify_rain(item['amount'])})\n"
+            if item["start"] and item["end"]:
+                msg += f"  من الساعة {item['start']} إلى الساعة {item['end']}\n"
+            if item["ongoing"]:
+                msg += "  الهطول مازال مستمر\n"
         msg += "\n"
 
     msg += "أعلى كميات الهطول المسجلة:\n\n"
 
-    for i, item in enumerate(parsed_lines, 1):
+    for i, item in enumerate(parsed, 1):
         if item["amount"] is not None:
-            level = classify_rain(item["amount"])
-            msg += f"{i}. {item['location']}: {item['amount']} ملم"
-            if level:
-                msg += f" - {level}"
-            msg += "\n"
+            msg += f"{i}. {item['location']}: {item['amount']} ملم - {classify_rain(item['amount'])}\n"
         else:
             msg += f"{i}. {item['location']}\n"
 
@@ -158,7 +133,6 @@ def build_report(text):
 
     return msg
 
-
 def send_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -169,10 +143,7 @@ def send_message(message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     response = requests.post(
         url,
-        data={
-            "chat_id": chat_id,
-            "text": message
-        },
+        data={"chat_id": chat_id, "text": message},
         timeout=30
     )
 
@@ -180,45 +151,16 @@ def send_message(message):
     print("TELEGRAM RESPONSE:", response.text)
     response.raise_for_status()
 
-
-def get_report_hash(report_text):
-    return hashlib.sha256(report_text.encode("utf-8")).hexdigest()
-
-
-def load_last_hash():
-    if not os.path.exists(STATE_FILE):
-        return None
-
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return f.read().strip()
-
-
-def save_current_hash(report_hash):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        f.write(report_hash)
-
-
 if __name__ == "__main__":
     try:
         text = fetch_text()
         report = build_report(text)
-
-        current_hash = get_report_hash(report)
-        last_hash = load_last_hash()
-
-        if current_hash != last_hash:
-            send_message(report)
-            save_current_hash(current_hash)
-            print("NEW REPORT SENT")
-        else:
-            print("NO CHANGE - REPORT NOT SENT")
-
+        send_message(report)
+        print("DONE")
     except Exception as e:
         error_msg = f"Rain-KSA Error:\n{str(e)}"
         print(error_msg)
-
         try:
             send_message(error_msg)
-        except Exception as inner:
-            print("FAILED TO SEND ERROR TO TELEGRAM:", str(inner))
+        except Exception:
             raise
