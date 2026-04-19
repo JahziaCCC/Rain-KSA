@@ -6,17 +6,31 @@ from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
+ENTRY_PATTERN = re.compile(
+    r"^\s*(?P<rank>\d+)\.\s+"
+    r"(?P<location>.+?)\s*:\s*"
+    r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
+    r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)\s*"
+    r"(?P<ongoing>الهطول مستمر)?\s*$",
+    re.MULTILINE
+)
+
 def fetch_text():
-    r = requests.get(
+    response = requests.get(
         URL,
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=30
     )
-    r.raise_for_status()
+    response.raise_for_status()
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(response.text, "html.parser")
     text = soup.get_text("\n", strip=True)
-    return text
+
+    # نحافظ على الأسطر، وننظف المسافات داخل كل سطر فقط
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    cleaned_text = "\n".join(line for line in lines if line)
+
+    return cleaned_text
 
 def get_day_ar(day_en):
     days = {
@@ -40,43 +54,26 @@ def classify(amount):
     else:
         return "خفيف"
 
-def extract_items(text):
-    lines = text.splitlines()
+def extract_items(text, limit=15):
     items = []
 
-    pattern = re.compile(
-        r"(?P<location>.+?)\s*:\s*"
-        r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
-        r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)"
-        r"(?:\s*(?P<ongoing>الهطول مستمر))?"
-    )
-
-    for line in lines:
-        line = line.strip()
-        if "ملم" not in line or "من الساعة:" not in line:
-            continue
-
-        m = pattern.search(line)
-        if not m:
-            continue
-
-        location = m.group("location").strip()
-
-        # تنظيف الترقيم لو كان موجود في البداية مثل 1. أو 12.
-        location = re.sub(r"^\d+\.\s*", "", location).strip()
-
+    for match in ENTRY_PATTERN.finditer(text):
         items.append({
-            "location": location,
-            "amount": float(m.group("amount")),
-            "start": m.group("start").strip(),
-            "end": m.group("end").strip(),
-            "ongoing": bool(m.group("ongoing"))
+            "rank": int(match.group("rank")),
+            "location": match.group("location").strip(),
+            "amount": float(match.group("amount")),
+            "start": match.group("start").strip(),
+            "end": match.group("end").strip(),
+            "ongoing": bool(match.group("ongoing"))
         })
 
-    return items[:15]
+        if len(items) >= limit:
+            break
+
+    return items
 
 def build_report(text):
-    items = extract_items(text)
+    items = extract_items(text, limit=15)
     now = datetime.now()
 
     msg = ""
@@ -126,10 +123,7 @@ def send_message(message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     response = requests.post(
         url,
-        data={
-            "chat_id": chat_id,
-            "text": message
-        },
+        data={"chat_id": chat_id, "text": message},
         timeout=30
     )
     response.raise_for_status()
