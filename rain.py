@@ -43,8 +43,13 @@ def classify_rain(amount):
 def parse_rain_line(line):
     line = line.strip()
 
-    location_match = re.search(r"^(.*?):\s*(\d+(?:\.\d+)?)\s*ملم", line)
-    if not location_match:
+    # استخراج الموقع والكمية
+    main_match = re.search(
+        r"^(?P<location>.+?):\s*(?P<amount>\d+(?:\.\d+)?)\s*ملم",
+        line
+    )
+
+    if not main_match:
         return {
             "location": line,
             "amount": None,
@@ -53,15 +58,19 @@ def parse_rain_line(line):
             "ongoing": False
         }
 
-    location = location_match.group(1).strip()
-    amount = float(location_match.group(2))
+    location = main_match.group("location").strip()
+    amount = float(main_match.group("amount"))
 
-    start_match = re.search(r"من الساعة\s*(.*?)\s*إلى الساعة", line)
-    end_match = re.search(r"إلى الساعة\s*(.*?)(?:\s*الهطول مستمر|$)", line)
+    # استخراج وقت البداية والنهاية بالصيغتين المحتملتين
+    time_match = re.search(
+        r"\(من الساعة[:：]?\s*(?P<start>.*?)\s*إلى الساعة[:：]?\s*(?P<end>.*?)\)",
+        line
+    )
+
+    start_time = time_match.group("start").strip() if time_match else None
+    end_time = time_match.group("end").strip() if time_match else None
+
     ongoing = "الهطول مستمر" in line
-
-    start_time = start_match.group(1).strip() if start_match else None
-    end_time = end_match.group(1).strip() if end_match else None
 
     return {
         "location": location,
