@@ -43,25 +43,22 @@ def classify_rain(amount):
 def parse_rain_line(line):
     line = line.strip()
 
+    # الصيغة الحالية الفعلية في الصفحة:
+    # 1. آل قحطان (منطقة عسير): 52.5 ملم (من الساعة: 04:50 م إلى الساعة: 06:25 م)
+    # 7. السبعان (منطقة حائل): 16.3 ملم (من الساعة: 01:20 ص إلى الساعة: 09:25 م) الهطول مستمر
     pattern = re.compile(
-        r"^\s*\d+\.\s*"                               # الترقيم 1. 2. 3.
+        r"^\s*\d+\.\s*"
         r"(?P<location>.+?)\s*:\s*"
         r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
-        r"\(من الساعة[:：]?\s*(?P<start>.*?)\s*"
-        r"إلى الساعة[:：]?\s*(?P<end>.*?)\)\s*"
+        r"\(\s*من الساعة[:：]?\s*(?P<start>.*?)\s*"
+        r"إلى الساعة[:：]?\s*(?P<end>.*?)\s*\)\s*"
         r"(?P<ongoing>الهطول مستمر)?\s*$"
     )
 
     match = pattern.match(line)
 
     if not match:
-        return {
-            "location": line,
-            "amount": None,
-            "start": None,
-            "end": None,
-            "ongoing": False
-        }
+        return None
 
     return {
         "location": match.group("location").strip(),
@@ -89,8 +86,22 @@ def build_report(text):
             "لا توجد بيانات حالياً"
         )
 
-    parsed = [parse_rain_line(line) for line in rain_lines]
-    high_rain = [item for item in parsed if item["amount"] is not None and item["amount"] >= 50]
+    parsed = []
+    for line in rain_lines:
+        item = parse_rain_line(line)
+        if item:
+            parsed.append(item)
+
+    if not parsed:
+        return (
+            "تقرير الهاطل المطري - المملكة العربية السعودية\n\n"
+            f"اليوم: {day_ar}\n"
+            f"التاريخ: {date_text}\n"
+            f"الوقت: {time_text}\n\n"
+            "تم العثور على بيانات، لكن تعذر قراءة تنسيق الوقت من الصفحة."
+        )
+
+    high_rain = [item for item in parsed if item["amount"] >= 50]
     ongoing_rain = [item for item in parsed if item["ongoing"]]
 
     msg = ""
@@ -111,24 +122,15 @@ def build_report(text):
     msg += "أعلى كميات الهطول المسجلة:\n\n"
 
     for i, item in enumerate(parsed, 1):
-        if item["amount"] is not None:
-            msg += f"{i}. {item['location']}: {item['amount']} ملم - {classify_rain(item['amount'])}\n"
-        else:
-            msg += f"{i}. {item['location']}\n"
-
-        if item["start"] and item["end"]:
-            msg += f"   من الساعة {item['start']} إلى الساعة {item['end']}\n"
-
+        msg += f"{i}. {item['location']}: {item['amount']} ملم - {classify_rain(item['amount'])}\n"
+        msg += f"   من الساعة {item['start']} إلى الساعة {item['end']}\n"
         if item["ongoing"]:
             msg += "   الهطول مازال مستمر\n"
 
     if ongoing_rain:
         msg += "\nالمواقع التي مازال فيها الهطول مستمر:\n"
         for item in ongoing_rain:
-            msg += f"- {item['location']}"
-            if item["amount"] is not None:
-                msg += f": {item['amount']} ملم"
-            msg += "\n"
+            msg += f"- {item['location']}: {item['amount']} ملم\n"
 
     return msg
 
@@ -145,17 +147,14 @@ def send_message(message):
         data={"chat_id": chat_id, "text": message},
         timeout=30
     )
-
-    print("TELEGRAM STATUS:", response.status_code)
-    print("TELEGRAM RESPONSE:", response.text)
     response.raise_for_status()
+    print("DONE")
 
 if __name__ == "__main__":
     try:
         text = fetch_text()
         report = build_report(text)
         send_message(report)
-        print("DONE")
     except Exception as e:
         error_msg = f"Rain-KSA Error:\n{str(e)}"
         print(error_msg)
