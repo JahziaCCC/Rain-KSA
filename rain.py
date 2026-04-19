@@ -6,12 +6,13 @@ from datetime import datetime
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
-LINE_RE = re.compile(
-    r"^\s*(?P<rank>\d+)\.\s*"
+ENTRY_RE = re.compile(
+    r"\b(?P<rank>\d+)\.\s*"
     r"(?P<location>.+?)\s*:\s*"
     r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
     r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)"
-    r"(?:\s*(?P<ongoing>الهطول مستمر))?\s*$"
+    r"(?:\s*(?P<ongoing>الهطول مستمر))?",
+    re.DOTALL
 )
 
 def fetch_text():
@@ -42,37 +43,23 @@ def classify_rain(amount):
         return "متوسط"
     return "خفيف"
 
-def parse_rain_line(line):
-    m = LINE_RE.match(line.strip())
-    if not m:
-        return None
-
-    return {
-        "rank": int(m.group("rank")),
-        "location": m.group("location").strip(),
-        "amount": float(m.group("amount")),
-        "start": m.group("start").strip(),
-        "end": m.group("end").strip(),
-        "ongoing": bool(m.group("ongoing")),
-    }
-
-def extract_rain_entries(text, limit=15):
+def extract_entries(text, limit=15):
     entries = []
-    for line in text.splitlines():
-        if "ملم" not in line or "من الساعة:" not in line:
-            continue
-
-        item = parse_rain_line(line)
-        if item:
-            entries.append(item)
-
+    for m in ENTRY_RE.finditer(text):
+        entries.append({
+            "rank": int(m.group("rank")),
+            "location": " ".join(m.group("location").split()),
+            "amount": float(m.group("amount")),
+            "start": " ".join(m.group("start").split()),
+            "end": " ".join(m.group("end").split()),
+            "ongoing": bool(m.group("ongoing")),
+        })
         if len(entries) >= limit:
             break
-
     return entries
 
 def build_report(text):
-    entries = extract_rain_entries(text, limit=15)
+    entries = extract_entries(text, limit=15)
 
     now = datetime.now()
     day_ar = get_day_name_arabic(now.strftime("%A"))
