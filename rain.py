@@ -6,13 +6,12 @@ from playwright.sync_api import sync_playwright
 
 URL = "https://www.yanbuweather.com/pages/RainAmounts/"
 
-ENTRY_PATTERN = re.compile(
-    r"(?P<rank>\d+)\.\s*"
-    r"(?P<location>[^:\n]+?)\s*:\s*"
+LINE_PATTERN = re.compile(
+    r"^\s*"
+    r"(?P<location>.+?)\s*:\s*"
     r"(?P<amount>\d+(?:\.\d+)?)\s*ملم\s*"
-    r"\(من الساعة:\s*(?P<start>.*?)\s*إلى الساعة:\s*(?P<end>.*?)\)"
-    r"(?:\s*(?P<ongoing>الهطول مستمر))?",
-    re.DOTALL
+    r"\(من الساعة:\s*(?P<start>.+?)\s*إلى الساعة:\s*(?P<end>.+?)\)"
+    r"(?:\s*(?P<ongoing>الهطول مستمر))?\s*$"
 )
 
 def get_day_ar(day_en):
@@ -49,70 +48,90 @@ def fetch_text():
         finally:
             browser.close()
 
-def normalize_text(text):
-    text = text.replace("\xa0", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    return text
+def extract_lines(text, limit=15):
+    lines = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.split()).strip()
 
-def extract_items(text, limit=15):
-    text = normalize_text(text)
-    matches = list(ENTRY_PATTERN.finditer(text))
-    items = []
+        if (
+            ":" in line
+            and "ملم" in line
+            and "من الساعة:" in line
+            and "إلى الساعة:" in line
+        ):
+            lines.append(line)
 
-    for match in matches[:limit]:
-        items.append({
-            "rank": int(match.group("rank")),
-            "location": match.group("location").strip(),
-            "amount": float(match.group("amount")),
-            "start": match.group("start").strip(),
-            "end": match.group("end").strip(),
-            "ongoing": bool(match.group("ongoing"))
-        })
+        if len(lines) >= limit:
+            break
 
-    return items
+    return lines
+
+def parse_line(line):
+    match = LINE_PATTERN.match(line)
+    if not match:
+        return None
+
+    return {
+        "location": match.group("location").strip(),
+        "amount": float(match.group("amount")),
+        "start": match.group("start").strip(),
+        "end": match.group("end").strip(),
+        "ongoing": bool(match.group("ongoing")),
+    }
 
 def build_report(text):
-    items = extract_items(text, limit=15)
     now = datetime.now()
+    header = (
+        "تقرير الهاطل المطري - المملكة العربية السعودية\n\n"
+        f"اليوم: {get_day_ar(now.strftime('%A'))}\n"
+        f"التاريخ: {now.strftime('%Y-%m-%d')}\n"
+        f"الوقت: {now.strftime('%H:%M')}\n\n"
+    )
 
-    msg = ""
-    msg += "تقرير الهاطل المطري - المملكة العربية السعودية\n\n"
-    msg += f"اليوم: {get_day_ar(now.strftime('%A'))}\n"
-    msg += f"التاريخ: {now.strftime('%Y-%m-%d')}\n"
-    msg += f"الوقت: {now.strftime('%H:%M')}\n\n"
+    raw_lines = extract_lines(text, limit=15)
+    items = []
+
+    for line in raw_lines:
+        item = parse_line(line)
+        if item:
+            items.append(item)
 
     if not items:
-        msg += "تعذر استخراج بيانات الهطول من الصفحة.\n\n"
-        msg += "معاينة:\n"
-        msg += normalize_text(text)[:1500]
-        return msg
+        preview = "\n".join(raw_lines[:5]) if raw_lines else "لم يتم العثور على أسطر مطابقة."
+        return header + "تعذر استخراج بيانات الهطول من الصفحة.\n\nمعاينة:\n" + preview
 
     high_rain = [x for x in items if x["amount"] >= 50]
     ongoing_rain = [x for x in items if x["ongoing"]]
 
-    if high_rain:
-        msg += "التنبيهات:\n"
-        for item in high_rain:
-            msg += f"- {item['location']}: {item['amount']} ملم ({classify(item['amount'])})\n"
-            msg += f"  من الساعة {item['start']} إلى الساعة {item['end']}\n"
-            if item["ongoing"]:
-                msg += "  الهطول مازال مستمر\n"
-        msg += "\n"
+    parts = [header]
 
-    msg += "أعلى كميات الهطول المسجلة:\n\n"
+    if high_rain:
+        parts.append("التنبيهات:\n")
+        for item in high_rain:
+            parts.append(
+                f"- {item['location']}: {item['amount']} ملم ({classify(item['amount'])})\n"
+            )
+            parts.append(f"  من الساعة {item['start']} إلى الساعة {item['end']}\n")
+            if item["ongoing"]:
+                parts.append("  الهطول مازال مستمر\n")
+        parts.append("\n")
+
+    parts.append("أعلى كميات الهطول المسجلة:\n\n")
 
     for i, item in enumerate(items, 1):
-        msg += f"{i}. {item['location']}: {item['amount']} ملم - {classify(item['amount'])}\n"
-        msg += f"   من الساعة {item['start']} إلى الساعة {item['end']}\n"
+        parts.append(
+            f"{i}. {item['location']}: {item['amount']} ملم - {classify(item['amount'])}\n"
+        )
+        parts.append(f"   من الساعة {item['start']} إلى الساعة {item['end']}\n")
         if item["ongoing"]:
-            msg += "   الهطول مازال مستمر\n"
+            parts.append("   الهطول مازال مستمر\n")
 
     if ongoing_rain:
-        msg += "\nالمواقع التي مازال فيها الهطول مستمر:\n"
+        parts.append("\nالمواقع التي مازال فيها الهطول مستمر:\n")
         for item in ongoing_rain:
-            msg += f"- {item['location']}: {item['amount']} ملم\n"
+            parts.append(f"- {item['location']}: {item['amount']} ملم\n")
 
-    return msg
+    return "".join(parts)
 
 def send_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -125,16 +144,19 @@ def send_message(message):
     response = requests.post(
         url,
         data={"chat_id": chat_id, "text": message},
-        timeout=30
+        timeout=30,
     )
     response.raise_for_status()
-    print("DONE")
+
+def main():
+    text = fetch_text()
+    report = build_report(text)
+    send_message(report)
 
 if __name__ == "__main__":
     try:
-        text = fetch_text()
-        report = build_report(text)
-        send_message(report)
+        main()
+        print("DONE")
     except Exception as e:
         error_msg = f"Rain-KSA Error:\n{str(e)}"
         print(error_msg)
