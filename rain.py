@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+from collections import Counter
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
@@ -13,6 +14,8 @@ LINE_PATTERN = re.compile(
     r"\(من الساعة:\s*(?P<start>.+?)\s*إلى الساعة:\s*(?P<end>.+?)\)"
     r"(?:\s*(?P<ongoing>الهطول مستمر))?\s*$"
 )
+
+REGION_PATTERN = re.compile(r"\((.*?)\)")
 
 def get_day_ar(day_en):
     days = {
@@ -36,6 +39,12 @@ def classify(amount):
     else:
         return "خفيف"
 
+def extract_region(location):
+    match = REGION_PATTERN.search(location)
+    if match:
+        return match.group(1).strip()
+    return "غير محدد"
+
 def fetch_text():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -48,7 +57,7 @@ def fetch_text():
         finally:
             browser.close()
 
-def extract_lines(text, limit=15):
+def extract_lines(text, limit=10):
     lines = []
     for raw_line in text.splitlines():
         line = " ".join(raw_line.split()).strip()
@@ -71,8 +80,11 @@ def parse_line(line):
     if not match:
         return None
 
+    location = match.group("location").strip()
+
     return {
-        "location": match.group("location").strip(),
+        "location": location,
+        "region": extract_region(location),
         "amount": float(match.group("amount")),
         "start": match.group("start").strip(),
         "end": match.group("end").strip(),
@@ -88,7 +100,7 @@ def build_report(text):
         f"الوقت: {now.strftime('%H:%M')}\n\n"
     )
 
-    raw_lines = extract_lines(text, limit=15)
+    raw_lines = extract_lines(text, limit=10)
     items = []
 
     for line in raw_lines:
@@ -103,7 +115,15 @@ def build_report(text):
     high_rain = [x for x in items if x["amount"] >= 50]
     ongoing_rain = [x for x in items if x["ongoing"]]
 
+    region_counter = Counter(item["region"] for item in items)
+    top_region, top_region_count = region_counter.most_common(1)[0]
+
     parts = [header]
+
+    parts.append("ملخص سريع:\n")
+    parts.append(f"- عدد المواقع الظاهرة: {len(items)}\n")
+    parts.append(f"- أعلى منطقة نشاط: {top_region} ({top_region_count} مواقع)\n")
+    parts.append(f"- أعلى كمية مسجلة: {items[0]['amount']} ملم في {items[0]['location']}\n\n")
 
     if high_rain:
         parts.append("التنبيهات:\n")
