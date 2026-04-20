@@ -17,6 +17,7 @@ LINE_PATTERN = re.compile(
 
 REGION_PATTERN = re.compile(r"\((.*?)\)")
 
+
 def get_day_ar(day_en):
     days = {
         "Monday": "الاثنين",
@@ -29,6 +30,7 @@ def get_day_ar(day_en):
     }
     return days.get(day_en, day_en)
 
+
 def classify(amount):
     if amount >= 50:
         return "غزير جدًا"
@@ -39,16 +41,26 @@ def classify(amount):
     else:
         return "خفيف"
 
+
+def normalize_region(region):
+    region = region.strip()
+    region = region.replace("منطقه", "منطقة")
+    region = region.replace("المنطقه", "المنطقة")
+    return region
+
+
 def extract_region(location):
     match = REGION_PATTERN.search(location)
     if match:
-        return match.group(1).strip()
+        return normalize_region(match.group(1))
     return "غير محدد"
+
 
 def fetch_text():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1600, "height": 2400})
+
         try:
             page.goto(URL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(5000)
@@ -57,8 +69,10 @@ def fetch_text():
         finally:
             browser.close()
 
+
 def extract_lines(text, limit=10):
     lines = []
+
     for raw_line in text.splitlines():
         line = " ".join(raw_line.split()).strip()
 
@@ -75,8 +89,10 @@ def extract_lines(text, limit=10):
 
     return lines
 
+
 def parse_line(line):
     match = LINE_PATTERN.match(line)
+
     if not match:
         return None
 
@@ -91,8 +107,10 @@ def parse_line(line):
         "ongoing": bool(match.group("ongoing")),
     }
 
+
 def build_report(text):
     now = datetime.now()
+
     header = (
         "تقرير الهاطل المطري - المملكة العربية السعودية\n\n"
         f"اليوم: {get_day_ar(now.strftime('%A'))}\n"
@@ -120,8 +138,7 @@ def build_report(text):
 
     parts = [header]
 
-    parts.append("ملخص سريع:\n")
-    parts.append(f"- عدد المواقع الظاهرة: {len(items)}\n")
+    parts.append("ملخص:\n")
     parts.append(f"- أعلى منطقة نشاط: {top_region} ({top_region_count} مواقع)\n")
     parts.append(f"- أعلى كمية مسجلة: {items[0]['amount']} ملم في {items[0]['location']}\n\n")
 
@@ -132,8 +149,10 @@ def build_report(text):
                 f"- {item['location']}: {item['amount']} ملم ({classify(item['amount'])})\n"
             )
             parts.append(f"  من الساعة {item['start']} إلى الساعة {item['end']}\n")
+
             if item["ongoing"]:
                 parts.append("  الهطول مازال مستمر\n")
+
         parts.append("\n")
 
     parts.append("أعلى كميات الهطول المسجلة:\n\n")
@@ -143,15 +162,18 @@ def build_report(text):
             f"{i}. {item['location']}: {item['amount']} ملم - {classify(item['amount'])}\n"
         )
         parts.append(f"   من الساعة {item['start']} إلى الساعة {item['end']}\n")
+
         if item["ongoing"]:
             parts.append("   الهطول مازال مستمر\n")
 
     if ongoing_rain:
         parts.append("\nالمواقع التي مازال فيها الهطول مستمر:\n")
+
         for item in ongoing_rain:
             parts.append(f"- {item['location']}: {item['amount']} ملم\n")
 
     return "".join(parts)
+
 
 def send_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -161,25 +183,34 @@ def send_message(message):
         raise ValueError("Telegram secrets missing")
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+
     response = requests.post(
         url,
-        data={"chat_id": chat_id, "text": message},
-        timeout=30,
+        data={
+            "chat_id": chat_id,
+            "text": message
+        },
+        timeout=30
     )
+
     response.raise_for_status()
+
 
 def main():
     text = fetch_text()
     report = build_report(text)
     send_message(report)
 
+
 if __name__ == "__main__":
     try:
         main()
         print("DONE")
+
     except Exception as e:
         error_msg = f"Rain-KSA Error:\n{str(e)}"
         print(error_msg)
+
         try:
             send_message(error_msg)
         except Exception:
